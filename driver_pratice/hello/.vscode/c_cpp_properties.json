@@ -1,0 +1,18 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "E:\BaiduNetdiskDownload\HD-RK3506-MINI\5-SDK源代码\rk3506_linux6.1_sdk20241216\rk3506_linux6.1_sdk\kernel-6.1\include",
+                "E:\BaiduNetdiskDownload\HD-RK3506-MINI\5-SDK源代码\rk3506_linux6.1_sdk20241216\rk3506_linux6.1_sdk\prebuilts"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE"
+            ]
+        }
+    ],
+    "version": 4
+}
