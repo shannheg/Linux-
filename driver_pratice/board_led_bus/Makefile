@@ -8,7 +8,7 @@ CROSS_COMPILE ?= $(SDK_DIR)/prebuilts/gcc/linux-x86/arm/gcc-arm-10.3-2021.07-x86
 APP := dpdrv
 
 obj-m += led.o
-led-objs := leddrv.o board_demo.o
+led-objs := leddrv.o board_demo.o chip_gpio.o
 ccflags-y := -Wno-error
 
 .PHONY: all modules app clean
