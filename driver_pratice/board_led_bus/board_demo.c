@@ -1,47 +1,99 @@
+#include <linux/module.h>
+#include <linux/platform_device.h>
+
+#include "led_opr.h"
+
 /*
 此处是作为板级设置，用于从chip_gpio中获取相关led的组类，并且传递至leddrv.c中注册驱动
 注册一个platform_device,用于存储相关的需要初始化的led资源，由name匹配后通过chip_gpio.c的probe进行寄存器的相应操作
 */
-#include <linux/module.h>
-#include <linux/platform_device.h>
-#include <linux/io.h>
-#include <linux/ioport.h>
-#include <linux/bitops.h>
-#include <linux/errno.h>
-#include "led_opr.h"
-
-
-static struct resource led_resource[] = {
+/*
+ * resource 保存需要被映射的真实寄存器物理地址范围。
+ * LED 使用哪一个 GPIO 引脚由 platform_data 的 board_leds[] 描述。
+ */
+static struct resource led_resources[] = {
     {
-        .pin = 0,
+        .start = 0xFF870000,
+        .end = 0xFF8700FF,
         .flags = IORESOURCE_MEM,
+        .name = "gpio1",
     },
     {
-        .pin = 1,
+        .start = 0xFF660000,
+        .end = 0xFF6600FF,
         .flags = IORESOURCE_MEM,
+        .name = "gpio1-ioc",
     },
+    {
+        .start = 0xFF9A0000,
+        .end = 0xFF9A08FF,
+        .flags = IORESOURCE_MEM,
+        .name = "cru",
+    },
+};
+
+static const struct board_led_desc board_leds[] = {
+    {
+        .group = 1,
+        .pin = 5,
+        .active_low = false,
+    },
+    {
+        .group = 1,
+        .pin = 6,
+        .active_low = false,
+    },
+};
+
+static const struct board_led_platform_data board_led_data = {
+    .leds = board_leds,
+    .num_leds = ARRAY_SIZE(board_leds),
 };
 
 static struct platform_device board_demo_led_device = {
     .name = "dp_led",
     .id = -1,
-    .num_resources = ARRAY_SIZE(led_resource),
-    .resource = led_resource,
+    .num_resources = ARRAY_SIZE(led_resources),
+    .resource = led_resources,
+    .dev = {
+        .platform_data = &board_led_data,
+    },
 };
 
-static int led_dev_init(void)
+static int __init board_demo_init(void)
 {
     int err;
-    err = platform_device_register(&board_demo_led_device);
-    return err;
-};
-static int led_dev_exit(void)
-{
-    int err = platform_device_unregister(&board_demo_led_device);
-    return err;
-};
 
-module_init(led_dev_init);
-module_exit(led_dev_exit);
+    // 先注册字符设备，再注册 platform_driver，最后注册 platform_device
+    err = led_init();
+    if (err)
+        return err;
+
+    err = chip_init();
+    if (err)
+        goto err_led_exit;
+
+    err = platform_device_register(&board_demo_led_device);
+    if (err)
+        goto err_chip_exit;
+
+    return 0;
+
+err_chip_exit:
+    chip_exit();
+err_led_exit:
+    led_exit();
+    return err;
+}
+
+static void __exit board_demo_exit(void)
+{
+    platform_device_unregister(&board_demo_led_device);
+    chip_exit();
+    led_exit();
+}
+
+module_init(board_demo_init);
+module_exit(board_demo_exit);
 
 MODULE_LICENSE("GPL");

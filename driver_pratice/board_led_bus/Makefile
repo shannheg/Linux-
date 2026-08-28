@@ -7,9 +7,12 @@ CROSS_COMPILE ?= $(SDK_DIR)/prebuilts/gcc/linux-x86/arm/gcc-arm-10.3-2021.07-x86
 
 APP := dpdrv
 
-obj-m += led.o
-led-objs := leddrv.o board_demo.o chip_gpio.o
-ccflags-y := -Wno-error
+obj-m += test_drv.o
+
+test_drv-objs := \
+    board_demo.o \
+    leddrv.o \
+    chip_gpio.o
 
 .PHONY: all modules app clean
 
@@ -21,7 +24,7 @@ modules:
 app: $(APP)
 
 $(APP): main.c
-	$(CROSS_COMPILE)gcc -Wall -O2 -o $@ $<
+	$(CROSS_COMPILE)gcc -Wall -Wextra -O2 -o $@ $<
 
 clean:
 	$(MAKE) -C $(KERN_DIR) M=$(CURDIR) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) clean

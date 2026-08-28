@@ -1,105 +1,157 @@
-#include <linux/module.h>
-#include <linux/fs.h>
-#include <linux/miscdevice.h>
-#include <linux/delay.h>
-#include <linux/proc_fs.h>
-#include <linux/seq_file.h>
-#include <linux/capability.h>
-#include <linux/init.h>
-#include <linux/mutex.h>
-#include <linux/io.h>
-#include <linux/bitops.h>
-#include <linux/uaccess.h>
 #include <linux/device.h>
+#include <linux/err.h>
+#include <linux/fs.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/uaccess.h>
+
 #include "led_opr.h"
+
 static int major;
-
-static struct led_operation *chip_gpio_operation;
 static struct class *led_class;
+static struct led_operation *led_oprs[LED_MAX];
+static DEFINE_MUTEX(led_lock);
 
-static void __iomem *gpio1_ioc_sel;
-static void __iomem *gpio1_ddr_h;//输出，设置output
-static void __iomem *gpio1_dr_h;//置为1
-static void __iomem *cru_gate_con03;
-static void __iomem *cru_gate_con22;
+static ssize_t led_write(struct file *file, const char __user *buf,
+                         size_t count, loff_t *ppos)
+{
+    struct led_operation *opr = file->private_data;
+    char value; // 用于将用户空间读取的值暂存
+    int minor; // 从本次打开的字符设备获取设备号
+    int status; // 本次 LED 的状态
+    int ret;
 
-
-static ssize_t led_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos){
-    char val;//用于将用户空间读取的值暂存
-    int minor;//从本次打开的字符设备获取设备号
-    int status;//本次led的状态
-
-    if(count < 1){
+    if (!count)
         return -EINVAL;
-    }
 
-    if(copy_from_user(&val, buf, 1)){//从用户空间读取1个数据到val中
+    if (copy_from_user(&value, buf, 1)) // 从用户空间读取 1 个数据到 value 中
         return -EFAULT;
-    }
-    if(val == '1'){
+
+    if (value == '1')
         status = 1;
-    }
-    else{
+    else if (value == '0')
         status = 0;
-    }
-    minor = iminor(file->f_inode);//获取当前打开的设备号
-    int ret = chip_gpio_operation->control(minor, status);
-    if(ret){
+    else
+        return -EINVAL;
+
+    minor = iminor(file_inode(file));//获取当前打开的设备号
+    if (!opr || !opr->control || minor < 0 || minor >= LED_MAX)
+        return -ENODEV;
+
+    ret = opr->control(minor, status);
+    if (ret)
         return ret;
-    }
+
     return 1;
 }
 
-static int led_open(struct inode *node, struct file *file){
-    int minor = iminor(node);
-    chip_gpio_operation->init(minor);
+static int led_open(struct inode *inode, struct file *file)
+{
+    struct led_operation *opr;
+    int minor = iminor(inode);
+    int ret;
+
+    if (minor < 0 || minor >= LED_MAX)
+        return -ENODEV;
+
+    mutex_lock(&led_lock);
+    opr = led_oprs[minor];
+    if (!opr || !opr->init || !opr->control || !try_module_get(opr->owner)) {
+        mutex_unlock(&led_lock);
+        return -ENODEV;
+    }
+    file->private_data = opr;
+    mutex_unlock(&led_lock);
+
+    // 根据当前打开的次设备号初始化对应 LED
+    ret = opr->init(minor);
+    if (ret) {
+        file->private_data = NULL;
+        module_put(opr->owner);
+    }
+
+    return ret;
+}
+
+static int led_release(struct inode *inode, struct file *file)
+{
+    struct led_operation *opr = file->private_data;
+
+    if (opr)
+        module_put(opr->owner);
+
     return 0;
 }
 
-static struct file_operations led_fops = {
+static const struct file_operations led_fops = {
     .owner = THIS_MODULE,
-    .write = led_write,
     .open = led_open,
-    
+    .release = led_release,
+    .write = led_write,
 };
 
+int led_device_create(int minor, struct led_operation *opr)
+{
+    struct device *dev;
 
-//入口函数
-static int __init led_init(void){
-    printk("%s, %s, line %d \n ------------------make by dp\n", __FILE__, __func__, __LINE__);
-    major = register_chrdev(0, "dp_led", &led_fops);//注册字符设备的主设备号，将设备号范围与file_operations结构体绑定
-    if(major < 0){
-        printk("register_chrdev failed\n");
+    if (minor < 0 || minor >= LED_MAX || !opr || !opr->init || !opr->control)
+        return -EINVAL;
+
+    mutex_lock(&led_lock);
+    if (led_oprs[minor]) {
+        mutex_unlock(&led_lock);
+        return -EBUSY;
+    }
+
+    led_oprs[minor] = opr;
+    // 创建具体的设备节点，minor 区分不同 LED
+    dev = device_create(led_class, NULL, MKDEV(major, minor), NULL,
+                        "leddrv-dpled%d", minor);
+    if (IS_ERR(dev)) {
+        led_oprs[minor] = NULL;
+        mutex_unlock(&led_lock);
+        return PTR_ERR(dev);
+    }
+
+    mutex_unlock(&led_lock);
+    return 0;
+}
+
+void led_device_destroy(int minor)
+{
+    if (minor < 0 || minor >= LED_MAX)
+        return;
+
+    mutex_lock(&led_lock);
+    if (led_oprs[minor]) {
+        led_oprs[minor] = NULL;
+        device_destroy(led_class, MKDEV(major, minor));
+    }
+    mutex_unlock(&led_lock);
+}
+
+int led_init(void)
+{
+    //入口函数
+    // 注册字符设备主设备号，并将设备号范围与 file_operations 结构体绑定
+    major = register_chrdev(0, "dp_led", &led_fops);
+    if (major < 0)
         return major;
-    }
 
-    led_class = class_create(THIS_MODULE, "my_led");//把同一类相似的设备号组织在一起，为后续device_create创建设备节点提供支持,设备中显示为/sys/class/my_led/
-    if(IS_ERR(led_class)){
+    // 创建同类设备 class，为后续 device_create 创建设备节点提供支持
+    led_class = class_create(THIS_MODULE, "my_led");
+    if (IS_ERR(led_class)) {
+        int ret = PTR_ERR(led_class);
+
         unregister_chrdev(major, "dp_led");
-        return PTR_ERR(led_class);
+        return ret;
     }
-
-    chip_gpio_operation = get_board_led_operation();//获取led的操作函数结构体
 
     return 0;
 }
 
-void led_device_create(int minor){
-    device_create(led_class, NULL, MKDEV(major,minor), NULL, "leddrv-dpled%d", minor);//创建具体的设备节点，这里通过此设备号创建不同的设备
-
-}
-
-void led_device_destroy(int minor){
-    device_destroy(led_class, MKDEV(major, minor));
-}
-EXPORT_SYMBOL(led_device_create);
-EXPORT_SYMBOL(led_device_destroy);
-
-static void __exit led_exit(void){
-    class_destroy(led_class); 
+void led_exit(void)
+{
+    class_destroy(led_class);
     unregister_chrdev(major, "dp_led");
 }
-module_init(led_init);
-module_exit(led_exit);
-
-MODULE_LICENSE("GPL");

@@ -1,33 +1,43 @@
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
-//运行实例./desktop 1(which) 1(status)
-int main (int argc, char *argv[])
+//运行实例./dpdrv 1(which) 1(status)
+int main(int argc, char *argv[])
 {
+    char path[64];
     int fd;
-    char buf[1] = {0}; // Buffer to hold the value to write to the LED device
-    // Open the GPIO device file
-    fd = open("/dev/leddrv-dpled%d", O_RDWR, argv[1]);
-    if (fd < 0) {
-        perror("Failed to open /dev/leddrv-dpled");
-        return -1;
+    int which;
+
+    if (argc != 3 || (argv[2][0] != '0' && argv[2][0] != '1') ||
+        argv[2][1] != '\0') {
+        fprintf(stderr, "Usage: %s <led-number> <0|1>\n", argv[0]);
+        return 1;
     }
 
-    // Turn on the LED
-    write(fd, argv[2], 1);
+    which = strtol(argv[1], NULL, 10);
+    if (which < 0) {
+        fprintf(stderr, "LED number must be non-negative\n");
+        return 1;
+    }
 
-    // Wait for a while
-    sleep(1);
+    // Open the GPIO device file
+    snprintf(path, sizeof(path), "/dev/leddrv-dpled%d", which);
+    fd = open(path, O_RDWR);
+    if (fd < 0) {
+        perror(path);
+        return 1;
+    }
 
-    // Turn off the LED
-    buf[0] = '0'; // Assuming '0' turns off the LED
-    write(fd, buf, 1);
+    // Turn on or turn off the LED according to argv[2]
+    if (write(fd, argv[2], 1) != 1) {
+        perror("write");
+        close(fd);
+        return 1;
+    }
 
     // Close the device file
     close(fd);
-
     return 0;
 }

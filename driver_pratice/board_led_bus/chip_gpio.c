@@ -1,149 +1,202 @@
-/*
-此处为platform_driver的相关函数，该文件的主要功能为通过name匹配对应的platform_device，并且通过probe函数进行初始化
-对于具体向寄存器写入信息的操作，交由leddrv.c进行操作
-*/
-
+#include <linux/bitops.h>
+#include <linux/err.h>
+#include <linux/errno.h>
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/io.h>
-#include <linux/ioport.h>
-#include <linux/bitops.h>
-#include <linux/errno.h>
+
 #include "led_opr.h"
 
+/*
+此处为platform_driver的相关函数，该文件的主要功能为通过name匹配对应的platform_device，并且通过probe函数进行初始化
+对于具体向寄存器写入信息的操作，当前由chip_gpio.c中的init和control函数完成，leddrv.c负责调用对应操作函数
+*/
+static int g_ledpins[LED_MAX]; // LED 使用的 GPIO 组号和引脚号
+static bool g_led_active_low[LED_MAX]; // LED 是否为低电平有效
+static int g_ledcnt; // 当前已经创建的 LED 节点数量
 
+static void __iomem *gpio_ioc_sel; // iomux 用于选择引脚输出的功能
+static void __iomem *gpio_ddr_h; // 输出方向寄存器，设置 output
+static void __iomem *gpio_dr_h; // 输出数据寄存器，设置高低电平
+static void __iomem *cru_gate_con03; // GPIO1 IOC 时钟
+static void __iomem *cru_gate_con22; // GPIO1 时钟
 
-static int g_ledpins[100];//led总共的数组
-static int g_ledcnt = 0;//led编号
+static int chip_gpio_init(int which);
+static int chip_gpio_control(int which, int status);
 
-static void __iomem *gpio_ioc_sel; //iomux用于选择引脚输出的功能
-static void __iomem *gpio_ddr_h;   //输出，设置output
-static void __iomem *gpio_dr_h;    //输出置为高电平
-static void __iomem *cru_gate_con03;//GPIO1 IOC时钟
-static void __iomem *cru_gate_con22;//GPIO1时钟
-
-static int chip_gpio_probe(struct platform_device *dev)
-{
-    //记录board_demo中的led引脚，创建设备节点
-    struct resource *res;
-    
-    while(1){
-        res = platform_get_resource(dev, IORESOURCE_MEM, g_ledcnt);//从platform_device中获取注册为IORESOURCE_MEM的资源
-        if(res == NULL){
-            break;
-        }
-        chip_gpio_init(g_ledcnt);//根据当前led编号进行初始化
-        g_ledpins[g_ledcnt] = res->pin;//记录当前led的引脚编号
-        led_device_create(g_ledcnt);//根据当前led编号创建设备节点
-        g_ledcnt++;
-
-    }
-    printk("%s %s line %d\n", __FILE__, __func__, __LINE__);
-    return 0;
-}
-
-static int chip_gpio_remove(struct platform_device *dev)
-{
-    //移除相关引脚
-    iounmap(gpio_ioc_sel);
-    iounmap(gpio_ddr_h);
-    iounmap(gpio_dr_h);   
-    iounmap(cru_gate_con03);
-    iounmap(cru_gate_con22);
-
-    for(;g_ledcnt >= 0; g_ledcnt--){
-        led_device_destroy(g_ledcnt);
-    }
-    g_ledcnt = 0;
-    
-    printk("%s %s line %d\n", __FILE__, __func__, __LINE__);
-    return 0;
-}
-
-static struct platform_driver chip_gpio = {
-    .probe = chip_gpio_probe,
-    .remove = chip_gpio_remove,
-    .driver = {
-        .name = "dp_led",
-        .owner = THIS_MODULE,
-    },
-
-};
-
-static int chip_gpio_init(int which)//根据当前led编号进行初始化
-{
-    //GPIO1通用寄存器地址映射与写入
-    gpio_ioc_sel  = ioremap(0xFF660000 + 0x0034, 4);
-    cru_gate_con03 = ioremap(0xFF9A0000 + 0x080C, 4);
-    cru_gate_con22 = ioremap(0xFF9A0000 + 0x0858, 4);
-
-    writel(0x00F00000, gpio_ioc_sel);
-    writel(BIT(16 + 8), cru_gate_con03);
-    writel(BIT(16 + 1), cru_gate_con22);
-
-    return 0;
-    printk("GPIO INIT\n");   
-}
-
-static int chip_gpio_control(int which, int status)//根据当前led编号进行控制
-{
-    switch(which){
-        case 0:
-            //GPIO1_C5的相应寄存器地址映射
-            gpio_ddr_h    = ioremap(0xFF870000 + 0x000C, 4);
-            gpio_dr_h     = ioremap(0xFF870000 + 0x0004, 4);
-
-            if(status != 1) break;
-
-            //写入寄存器
-            writel(0x00200020, gpio_ddr_h);
-            writel(0x00200020, gpio_dr_h); 
-            break;
-        case 1:
-            //GPIO1_C7的相应寄存器地址映射
-            gpio_ddr_h    = ioremap(0xFF870000 + 0x000C, 4);
-            gpio_dr_h     = ioremap(0xFF870000 + 0x0004, 4);
-
-            if(status != 1) break;
-
-            writel(BIT(7) << 16, gpio_ddr_h);
-            writel(BIT(16 + 7), gpio_dr_h);
-
-            break;
-        default: return -ENOMEM;
-    }
-    return 0;
-}
-
-struct led_operation chip_gpio_operation = {
+static struct led_operation chip_gpio_operation = {
+    .owner = THIS_MODULE,
     .init = chip_gpio_init,
     .control = chip_gpio_control,
 };
 
-struct led_operation *get_board_led_operation(void)
+static void gpio_write_bit(void __iomem *reg, unsigned int pin, int value)
 {
-    return &chip_gpio_operation;
+    // 写入寄存器：高16位为写掩码，低16位为数据
+    writel(BIT(16 + pin) | (value ? BIT(pin) : 0), reg);
 }
 
-
-static int chip_init(void)
+static void chip_gpio_unmap(void)
 {
-    int ret;
-    ret = platform_driver_register(&chip_gpio);//注册为platform_driver,从chip_gpio中匹配名字，若匹配则进入probe函数
-    if(ret){
-        platform_driver_unregister(&chip_gpio);
-        printk("platform_driver_register failed\n");
-        return ret;
-    }
+    /* devm_ioremap_resource() will release the mappings after remove(). */
+    gpio_ioc_sel = NULL;
+    gpio_ddr_h = NULL;
+    gpio_dr_h = NULL;
+    cru_gate_con03 = NULL;
+    cru_gate_con22 = NULL;
+}
+
+static int chip_gpio_map(struct platform_device *pdev)
+{
+    void __iomem *gpio_base;
+    void __iomem *ioc_base;
+    void __iomem *cru_base;
+
+    // GPIO1通用寄存器地址映射与写入
+    gpio_base = devm_platform_ioremap_resource_byname(pdev, "gpio1");
+    if (IS_ERR(gpio_base))
+        return PTR_ERR(gpio_base);
+
+    ioc_base = devm_platform_ioremap_resource_byname(pdev, "gpio1-ioc");
+    if (IS_ERR(ioc_base))
+        return PTR_ERR(ioc_base);
+
+    cru_base = devm_platform_ioremap_resource_byname(pdev, "cru");
+    if (IS_ERR(cru_base))
+        return PTR_ERR(cru_base);
+
+    /* GPIO1 registers are shared by both LEDs; only the pin bit differs. */
+    gpio_dr_h = gpio_base + 0x0004;
+    gpio_ddr_h = gpio_base + 0x000c;
+    gpio_ioc_sel = ioc_base + 0x0034;
+    cru_gate_con03 = cru_base + 0x080c;
+    cru_gate_con22 = cru_base + 0x0858;
+
+    writel(BIT(16 + 8), cru_gate_con03);
+    writel(BIT(16 + 1), cru_gate_con22);
+
+    /* The original board setup selects GPIO mode for the GPIO1_C pins. */
+    writel(0x00f00000, gpio_ioc_sel);
     return 0;
 }
 
-static int chip_exit(void)
+static int chip_gpio_init(int which)
 {
-    int err = platform_driver_unregister(&chip_gpio);
-    return err;
+    unsigned int group;
+    unsigned int pin;
+
+    if (which < 0 || which >= g_ledcnt || !gpio_ddr_h || !gpio_dr_h)
+        return -ENODEV;
+
+    group = g_ledpins[which] >> 16;
+    pin = g_ledpins[which] & 0xffff;
+    if (group != 1 || pin > 7)
+        return -EINVAL;
+
+    // 根据当前 LED 编号设置对应 GPIO 为输出并设置初始灭灯状态
+    gpio_write_bit(gpio_ddr_h, pin, 1);
+    gpio_write_bit(gpio_dr_h, pin, g_led_active_low[which]);
+    return 0;
 }
 
-module_init(chip_init);
-module_exit(chip_exit);
-MODULE_LICENSE("GPL");
+static int chip_gpio_control(int which, int status)
+{
+    unsigned int group;
+    unsigned int pin;
+
+    if (which < 0 || which >= g_ledcnt || !gpio_dr_h)
+        return -ENODEV;
+
+    group = g_ledpins[which] >> 16;
+    pin = g_ledpins[which] & 0xffff;
+    if (group != 1 || pin > 7)
+        return -EINVAL;
+
+    // 根据当前 LED 编号控制对应 GPIO 的亮灭
+    if (g_led_active_low[which])
+        status = !status;
+    gpio_write_bit(gpio_dr_h, pin, !!status);
+    return 0;
+}
+
+static int chip_gpio_probe(struct platform_device *pdev)
+{
+    const struct board_led_platform_data *pdata = dev_get_platdata(&pdev->dev);
+    int index;
+    int ret;
+
+    if (!pdata || !pdata->leds || !pdata->num_leds ||
+        pdata->num_leds > LED_MAX)
+        return -EINVAL;
+
+    ret = chip_gpio_map(pdev);
+    if (ret)
+        return ret;
+
+    //记录board_demo中的led引脚，创建设备节点
+    for (index = 0; index < pdata->num_leds; index++) {
+        if (pdata->leds[index].group != 1 || pdata->leds[index].pin > 7) {
+            ret = -EINVAL;
+            goto err_destroy_devices;
+        }
+
+        g_ledpins[index] = (pdata->leds[index].group << 16) |
+                           pdata->leds[index].pin;
+        g_led_active_low[index] = pdata->leds[index].active_low;
+        g_ledcnt = index + 1;
+
+        ret = chip_gpio_init(index);
+        if (ret)
+            goto err_destroy_devices;
+
+        ret = led_device_create(index, &chip_gpio_operation);
+        if (ret)
+            goto err_destroy_devices;
+    }
+
+    return 0;
+
+err_destroy_devices:
+    while (--index >= 0) {
+        led_device_destroy(index);
+        g_ledpins[index] = 0;
+        g_led_active_low[index] = false;
+    }
+    g_ledcnt = 0;
+    chip_gpio_unmap();
+    return ret;
+}
+
+static int chip_gpio_remove(struct platform_device *pdev)
+{
+    int index;
+
+    //移除相关引脚
+    for (index = g_ledcnt - 1; index >= 0; index--) {
+        led_device_destroy(index);
+        g_ledpins[index] = 0;
+        g_led_active_low[index] = false;
+    }
+    g_ledcnt = 0;
+    chip_gpio_unmap();
+    return 0;
+}
+
+static struct platform_driver chip_gpio_driver = {
+    .probe = chip_gpio_probe,
+    .remove = chip_gpio_remove,
+    .driver = {
+        .name = "dp_led",
+    },
+};
+
+int chip_init(void)
+{
+    //注册为platform_driver,从chip_gpio中匹配名字，若匹配则进入probe函数
+    return platform_driver_register(&chip_gpio_driver);
+}
+
+void chip_exit(void)
+{
+    platform_driver_unregister(&chip_gpio_driver);
+}
