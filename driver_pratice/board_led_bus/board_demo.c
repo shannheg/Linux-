@@ -40,12 +40,12 @@ static const struct board_led_desc board_leds[] = {
     },
     {
         .group = 1,
-        .pin = 6,
+        .pin = 7,
         .active_low = false,
     },
 };
 
-static const struct board_led_platform_data board_led_data = {
+static struct board_led_platform_data board_led_data = {
     .leds = board_leds,
     .num_leds = ARRAY_SIZE(board_leds),
 };

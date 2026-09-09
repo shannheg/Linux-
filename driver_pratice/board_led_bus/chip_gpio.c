@@ -2,6 +2,7 @@
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/io.h>
+#include <linux/ioport.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 
@@ -38,12 +39,30 @@ static void gpio_write_bit(void __iomem *reg, unsigned int pin, int value)
 
 static void chip_gpio_unmap(void)
 {
-    /* devm_ioremap_resource() will release the mappings after remove(). */
+    /* devm_ioremap() will release the mappings after remove(). */
     gpio_ioc_sel = NULL;
     gpio_ddr_h = NULL;
     gpio_dr_h = NULL;
     cru_gate_con03 = NULL;
     cru_gate_con22 = NULL;
+}
+
+/*
+ * devm_platform_ioremap_resource_byname()/devm_ioremap_resource() 在映射前会调用
+ * request_mem_region() 登记占用区段;而 GPIO1/IOC/CRU 地址已被内核中的
+ * GPIO/pinctrl/CRU 驱动(经设备树)占用,继续使用会因冲突返回 -EBUSY。
+ * 因此这里只做教学用的直接映射(devm_ioremap),不请求 region,绕开占用检查。
+ */
+static void __iomem *chip_gpio_ioremap_byname(struct platform_device *pdev,
+                                              const char *name)
+{
+    struct resource *res;
+
+    res = platform_get_resource_byname(pdev, IORESOURCE_MEM, name);
+    if (!res)
+        return NULL;
+
+    return devm_ioremap(&pdev->dev, res->start, resource_size(res));
 }
 
 static int chip_gpio_map(struct platform_device *pdev)
@@ -52,20 +71,20 @@ static int chip_gpio_map(struct platform_device *pdev)
     void __iomem *ioc_base;
     void __iomem *cru_base;
 
-    // GPIO1通用寄存器地址映射与写入
-    gpio_base = devm_platform_ioremap_resource_byname(pdev, "gpio1");
-    if (IS_ERR(gpio_base))
-        return PTR_ERR(gpio_base);
+    // GPIO1通用寄存器地址映射与写入(仅映射,不请求内存区段)
+    gpio_base = chip_gpio_ioremap_byname(pdev, "gpio1");
+    if (!gpio_base)
+        return -ENOMEM;
 
-    ioc_base = devm_platform_ioremap_resource_byname(pdev, "gpio1-ioc");
-    if (IS_ERR(ioc_base))
-        return PTR_ERR(ioc_base);
+    ioc_base = chip_gpio_ioremap_byname(pdev, "gpio1-ioc");
+    if (!ioc_base)
+        return -ENOMEM;
 
-    cru_base = devm_platform_ioremap_resource_byname(pdev, "cru");
-    if (IS_ERR(cru_base))
-        return PTR_ERR(cru_base);
+    cru_base = chip_gpio_ioremap_byname(pdev, "cru");
+    if (!cru_base)
+        return -ENOMEM;
 
-    /* GPIO1 registers are shared by both LEDs; only the pin bit differs. */
+    //设置全局需要的寄存器地址
     gpio_dr_h = gpio_base + 0x0004;
     gpio_ddr_h = gpio_base + 0x000c;
     gpio_ioc_sel = ioc_base + 0x0034;
@@ -76,7 +95,7 @@ static int chip_gpio_map(struct platform_device *pdev)
     writel(BIT(16 + 1), cru_gate_con22);
 
     /* The original board setup selects GPIO mode for the GPIO1_C pins. */
-    writel(0x00f00000, gpio_ioc_sel);
+    writel(0xf0f00000, gpio_ioc_sel);
     return 0;
 }
 
@@ -135,14 +154,9 @@ static int chip_gpio_probe(struct platform_device *pdev)
 
     //记录board_demo中的led引脚，创建设备节点
     for (index = 0; index < pdata->num_leds; index++) {
-        if (pdata->leds[index].group != 1 || pdata->leds[index].pin > 7) {
-            ret = -EINVAL;
-            goto err_destroy_devices;
-        }
-
         g_ledpins[index] = (pdata->leds[index].group << 16) |
                            pdata->leds[index].pin;
-        g_led_active_low[index] = pdata->leds[index].active_low;
+        g_led_active_low[index] = pdata->leds[index].active_low;//把platform_data中的active_low信息传递至全局变量中，便于后续控制led亮灭
         g_ledcnt = index + 1;
 
         ret = chip_gpio_init(index);

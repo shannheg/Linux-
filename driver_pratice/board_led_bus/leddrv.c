@@ -35,7 +35,7 @@ static ssize_t led_write(struct file *file, const char __user *buf,
         return -EINVAL;
 
     minor = iminor(file_inode(file));//获取当前打开的设备号
-    if (!opr || !opr->control || minor < 0 || minor >= LED_MAX)
+    if (!opr || !opr->control)
         return -ENODEV;
 
     ret = opr->control(minor, status);
@@ -56,11 +56,11 @@ static int led_open(struct inode *inode, struct file *file)
 
     mutex_lock(&led_lock);
     opr = led_oprs[minor];
-    if (!opr || !opr->init || !opr->control || !try_module_get(opr->owner)) {
+    if (!opr || !try_module_get(opr->owner)) {//打开此字符设备时，会自动增加led_operation结构体中owner的引用计数，对应的module_put在led_release中释放
         mutex_unlock(&led_lock);
         return -ENODEV;
     }
-    file->private_data = opr;
+    file->private_data = opr;//将opr操作函数存入打开设备的私有数据中，使得write中不用通过inode获取设备号查询
     mutex_unlock(&led_lock);
 
     // 根据当前打开的次设备号初始化对应 LED
@@ -94,7 +94,7 @@ int led_device_create(int minor, struct led_operation *opr)
 {
     struct device *dev;
 
-    if (minor < 0 || minor >= LED_MAX || !opr || !opr->init || !opr->control)
+    if (minor < 0)
         return -EINVAL;
 
     mutex_lock(&led_lock);
