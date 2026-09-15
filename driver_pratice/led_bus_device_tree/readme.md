@@ -1,0 +1,9 @@
+这是一个platfrom总线模型的LED测试驱动程序，整个的运行流程如下:
+在加载时，insmod test_drv.ko,运行./dpdrv 0 1，即可控制第一个LED为高电平，驱动的运行流程如下
+进入board_demo_init,首先进入led_init,此函数用于注册字符型的设备register_chrdev，包括分配主设备号、创建相同类(sys/class下可见)，为创建设备节点打基础的class_create，以及最后通过主设备号分配的次设备号创建的设备节点
+随后加载注册platform_device和platform_driver,这两个驱动在加载的时候通过结构体下的name进行匹配，如果匹配成功则进入各自的init函数，platfrom_driver则进入probe函数进行初始化
+各个文件的作用：
+board_demo.c：作为platfrom_device加载的文件
+chip_gpio.c: 作为platfrom_driver的文件，还包括GPIO的寄存器初始化以及设定等
+leddrv.c: 底层驱动，用于注册字符设备、设备节点等，还包括从用户层读取设备后通过led_opeartion操作函数转入chip_gpio的control中设置为高电平输出
+

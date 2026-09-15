@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Used when this directory is compiled as part of the kernel (built-in).
+# kbuild prefers this file over ./Makefile, so the external-module build
+# (make -C ... M=...) still uses ./Makefile.
+
+obj-y += board_demo.o leddrv.o chip_gpio.o

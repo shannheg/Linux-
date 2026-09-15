@@ -1,0 +1,12 @@
+RK_BUILDROOT_BASE_CFG="hd_rk3506b_iot_nand"
+RK_ROOTFS_UBI=y
+RK_ROOTFS_INSTALL_MODULES=y
+RK_WIFIBT_ON_BOARD=y
+RK_KERNEL_CFG="vanxoak_practice_rk3506b_defconfig"
+RK_KERNEL_DTS_NAME="dp-rk3506g2"
+RK_BOOT_COMPRESSED=y
+RK_BOOT_FIT_ITS_NAME="thunderboot.its"
+RK_RECOVERY_FIT_ITS_NAME="thunderboot4recovery.its"
+RK_FLASH_SIZE=2048
+RK_PARAMETER="parameter-iot-nand.txt"
+RK_USE_FIT_IMG=y
