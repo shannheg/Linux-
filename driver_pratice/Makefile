@@ -3,3 +3,4 @@
 # Kbuild for the practice drivers: build them into vmlinux (built-in).
 
 obj-y += led_bus_device_tree/
+obj-y += gpio_interrupt/

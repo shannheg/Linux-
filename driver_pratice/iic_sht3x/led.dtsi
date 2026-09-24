@@ -1,0 +1,25 @@
+/{
+    dp_led@0xFF870000{
+        compatible = "dp_led";
+        reg = <0xff870000 0x100>,	/* gpio1     */
+              <0xff660000 0x100>,	/* gpio1-ioc */
+              <0xff9a0000 0x900>;	/* cru       */
+        reg-names = "gpio1", "gpio1-ioc", "cru";
+
+        leds {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            led@0{
+                reg = <0>;
+                group = <1>;
+                pin = <5>;
+            }
+            led@1 {
+                reg = <1>;
+                group = <1>;
+                pin = <7>;
+            };
+        };
+    };
+};

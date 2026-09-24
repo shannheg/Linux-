@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# 作为内核源码树的一部分编译时使用（built-in）。
+# 进入本目录的两级跳板：
+#   kernel-6.1/Makefile:        core-y += driver_pratice/
+#   driver_pratice/Makefile:    obj-y  += gpio_interrupt/
+# 注意：kbuild 优先读本文件，单独编译模块前请先把它改名屏蔽（如 Kbuild.bak），
+#       否则会走 ./Makefile 之外的这套 obj-y，编不出 .ko。
+
+# LED 驱动（注册 led_classdev，dp_industry,dp_led）
+obj-y += interrupt-key-led.o
+# 按键中断驱动（用 devm_of_led_get 引用上面的 LED）
+obj-y += interrupt_key.o
