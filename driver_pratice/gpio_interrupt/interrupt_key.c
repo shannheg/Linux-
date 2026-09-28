@@ -52,7 +52,7 @@ static int interrupt_key_probe(struct platform_device *pdev){
         return -ENOMEM;
 
     key_data->dev = dev;
-    key_data->led_cdev = devm_of_led_get(dev, 0);
+    key_data->led_cdev = devm_of_led_get(dev, 0);//传入的dev为按键自己的设备，此处的第一个参数是led的消费者
     if (IS_ERR(key_data->led_cdev))
         return dev_err_probe(dev, PTR_ERR(key_data->led_cdev),
                              "Failed to get dp-led\n");
