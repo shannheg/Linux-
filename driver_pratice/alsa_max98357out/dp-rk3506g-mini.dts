@@ -1,0 +1,254 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2024 Rockchip Electronics Co., Ltd.
+ */
+
+/dts-v1/;
+
+#include "rk3506.dtsi"
+#include "rk3502.dtsi"
+#include "rk3506g-mini-v10.dtsi"
+//#include "rk3506g-mini-v10-mipi.dtsi"
+#include "rk3506g-mini-v10-rgb.dtsi"
+
+/ {
+	// LED
+	leds {
+		compatible = "gpio-leds";
+		status = "okay";
+		heart_led {
+			label = "run";
+			gpios = <&gpio0 RK_PB5 GPIO_ACTIVE_LOW>;
+			linux,default-trigger = "heartbeat";
+			default-state = "off";
+		};
+	};
+
+	// KEY
+	adc_keys: adc-keys {
+		compatible = "adc-keys";
+		status = "disabled";
+		io-channels = <&saradc 2>;
+		io-channel-names = "buttons";
+		keyup-threshold-microvolt = <1800000>;
+		poll-interval = <100>;
+
+		vol-up-key {
+			label = "key 1";
+			linux,code = <KEY_1>;
+			press-threshold-microvolt = <575000>;
+		};
+
+		vol-down-key {
+			label = "key 2";
+			linux,code = <KEY_2>;
+			press-threshold-microvolt = <1125000>;
+		};
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		linux,cma {
+			compatible = "shared-dma-pool";
+			inactive;
+			reusable;
+			size = <0x1000000>;
+			linux,cma-default;
+		};
+
+		drm_logo: drm-logo@0 {
+			compatible = "rockchip,drm-logo";
+			reg = <0x0 0x0>;
+		};
+	};
+
+	dp_gpio_interrupt: dp-gpio-interrupt {
+		compatible = "dp_industry,dp_key";
+        pinctrl-names = "default";
+        pinctrl-0 = <&key_gpio3_a7>;
+
+        interrupt-parent = <&gpio3>;
+        interrupts = <RK_PA7 IRQ_TYPE_EDGE_FALLING>;
+		leds = <&dp_led>;
+		status = "okay";
+	};
+
+	dp_led: dp-led {
+		compatible = "dp_industry,dp_led";
+		pinctrl-names = "default";
+		pinctrl-0 = <&dp_gpio_led>;
+		led-gpios = <&gpio3 RK_PA6 GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
+
+	/*
+	 * codec 节点：用内核现成的驱动 sound/soc/codecs/max98357a.c
+	 * MAX98357A 没有寄存器/I2C，不需要 reg，但必须有 #sound-dai-cells，
+	 * 否则 <&max98357a> 无法被解析成 sound-dai。
+	 */
+	max98357a: max98357a {
+		compatible = "maxim,max98357a";
+		#sound-dai-cells = <0>;
+		/* 如果板子上 SD_MODE 接了 GPIO，再打开下面两行：
+		 * sdmode-gpios = <&gpio3 RK_PB4 GPIO_ACTIVE_HIGH>;
+		 * sdmode-delay = <2>;
+		 */
+		status = "okay";
+	};
+
+	/*
+	 * machine 节点：用内核现成的驱动 sound/soc/generic/simple-card.c
+	 * 标签只能带下划线（dtc 的 LABEL 规则是 [a-zA-Z_][a-zA-Z0-9_]*），
+	 * 节点名仍可保留带 '-' 的 sai0-sound。
+	 */
+	sai0_sound: sai0-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "rk3506-max98357";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <256>;
+		/* MAX98357A 只能当时钟从设备，master 指向 CPU 侧子节点 */
+		simple-audio-card,bitclock-master = <&sai0_cpu>;
+		simple-audio-card,frame-master = <&sai0_cpu>;
+
+		sai0_cpu: simple-audio-card,cpu {
+			sound-dai = <&sai0>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&max98357a>;
+		};
+	};
+
+	/*
+	 * 以后要用自己写的 machine 驱动（driver_pratice/alsa_max98357out/alsa-max98357.c）
+	 * 时，才换成下面这套 dp_industry 前缀，并自己解析 DT
+	 * （参考 sound/soc/rockchip/rockchip_multicodecs.c）；用现成驱动时保持注释：
+	 *
+	 * sai0_my_sound: sai0-my-sound {
+	 *	compatible = "dp_industry,max98357-audio-sound";
+	 *	dp_industry,name = "max98357-sound";
+	 *	dp_industry,format = "i2s";
+	 *	dp_industry,mclk-fs = <256>;
+	 *	dp_industry,bitclock-master = <&sai0_cpu>;
+	 *	dp_industry,frame-master = <&sai0_cpu>;
+	 *
+	 *	sai0_cpu: dp_industry,cpu {
+	 *		sound-dai = <&sai0>;
+	 *	};
+	 *
+	 *	dp_industry,codec {
+	 *		sound-dai = <&max98357a>;
+	 *	};
+	 * };
+	 */
+};
+
+&saradc {
+	vref-supply = <&vcc_1v8>;
+	status = "okay";
+};
+
+// UART1 - JP3
+&uart1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&rm_io16_uart1_rx &rm_io17_uart1_tx>;
+	status = "okay";
+};
+
+// UART1 - JP4
+&uart2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&rm_io0_uart2_rx &rm_io2_uart2_tx>;
+	status = "okay";
+};
+
+// UART1 - JP5
+&uart3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&rm_io15_uart3_rx &rm_io14_uart3_tx>;
+	status = "okay";
+};
+
+// CAN0 - JP6
+&can0 {
+	rockchip,rx-max-data = <18>;
+	assigned-clocks = <&cru CLK_CAN0>;
+	assigned-clock-rates = <200000000>;
+	pinctrl-0 = <&rm_io19_can0_tx &rm_io20_can0_rx>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&i2c2 {
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&rm_io4_i2c2_scl &rm_io5_i2c2_sda>;
+	status = "okay";
+
+	// RTC
+	rtc_bmf8563: rtc@51 {
+		compatible = "haoyu,hym8563";
+		reg = <0x51>;
+		status = "okay";
+	};
+};
+
+&sai0 {
+	pinctrl-names = "default";
+	/*
+	 * SAI0 的信号只有两种落点：
+	 *  1) 专用脚 GPIO0_A0~A7（功能 1，就是 rk3502.dtsi 里 sai0 默认的
+	 *     sai0_lrck/sclk/mclk/sdo/sdi*_pins）；
+	 *  2) 任意 RM_IO 球，走 RM_IO 交叉开关（功能号 66~73，
+	 *     见 rk3506-pinctrl-rmio.dtsi 里的 rm_ioX_sai0_*）。
+	 * 本板 GPIO0_A0/A2/A3/A4/A5 已分给 UART2、背光 PWM、I2C2，
+	 * 所以这里改用 RM_IO8/9/10（GPIO0_B0/B1/B2）输出 SCLK/LRCK/SDO。
+	 * ！！！功放实际接在哪几根线上，请按原理图替换下面三个 phandle ！！！
+	 */
+	pinctrl-0 = <&rm_io8_sai0_sclk &rm_io9_sai0_lrck &rm_io10_sai0_sdo>;
+	status = "okay";
+};
+
+
+
+&pinctrl {
+	/*
+	 * rockchip pinctrl 必须两层：
+	 *   功能(function)节点  ->  组(group)节点(带 rockchip,pins)
+	 * 组平铺在 &pinctrl 下会变成 "groups = [ ]" 的空 function，
+	 * pinctrl-0 引用时就会报 unable to find group for node xxx。
+	 */
+	led {
+		dp_gpio_led: dp_gpio_led {
+			rockchip,pins = <3 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		gpio_led_run: gpio-led-run {
+			rockchip,pins = <0 RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	key {
+		key_gpio4_b2: key-gpio4-b2 {
+			rockchip,pins = <4 RK_PB2 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+	key-1 {
+		key_gpio3_a7: key_gpio3_a7 {
+			rockchip,pins = <3 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	/*
+	 * SAI0 不用在这里自定义 group：直接引用 rk3506-pinctrl-rmio.dtsi 里现成的
+	 * rm_ioX_sai0_* 组即可（见上面 &sai0 的 pinctrl-0）。
+	 *
+	 * 特别注意：bank3（GPIO3_x）没有 RM_IO 复用，像 <3 RK_PB0 51> 这种写法会被
+	 * drivers/pinctrl/pinctrl-rockchip.c 的 rockchip_set_rmio() 判为非法
+	 * （dmesg: rmio unsupported bank_num 3 function 36），
+	 * 会让 sai0 在 probe 阶段直接失败。
+	 */
+};

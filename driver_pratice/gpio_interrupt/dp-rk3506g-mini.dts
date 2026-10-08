@@ -135,6 +135,13 @@
 	};
 };
 
+&sai0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&
+}
+
+
+
 &pinctrl {
 	/*
 	 * rockchip pinctrl 必须两层：
@@ -160,6 +167,20 @@
 	key-1 {
 		key_gpio3_a7: key_gpio3_a7 {
 			rockchip,pins = <3 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	codec {
+		sai0-pins: sai0-pins {
+			rockchip,pins = 
+			/*GPIO3_B0 SAI0_MCLK*/
+			<3 RK_PB0 51 &pcfg_pull_none>,
+			/*GPIO3_B0 SAI0_SCLK*/
+			<3 RK_PB1 52 &pcfg_pull_none>,
+			/*GPIO3_B0 SAI0_LRCK*/
+			<3 RK_PB2 53 &pcfg_pull_none>,
+			/*GPIO3_B0 SAI0_SDO*/
+			<3 RK_PB3 54 &pcfg_pull_none>;
 		};
 	};
 };
