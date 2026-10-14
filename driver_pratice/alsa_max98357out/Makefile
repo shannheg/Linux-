@@ -4,6 +4,7 @@
 #
 #   make          默认目标：编用户态播放程序 main.c -> saiwav
 #   make app      同上
+#   make ffmpeg   编 FFmpeg + ALSA 播放程序 main1.c -> sai_ffmpeg
 #   make modules  编内核模块 alsa-max98357.ko（本目录 .c 还没写完整时先别执行）
 #   make dtb      把 dp-rk3506g-mini.dts 拷进内核 dts 目录并单独编 .dtb（语法自检用）
 #   make check-env 打印交叉编译器 / sysroot / alsa-lib 的探测结果
@@ -30,6 +31,7 @@ CROSS_COMPILE ?= $(SDK_DIR)/prebuilts/gcc/linux-x86/arm/gcc-arm-10.3-2021.07-x86
 
 # ---------------- 用户态程序 ----------------
 APP := saiwav
+FFMPEG_APP := sai_ffmpeg
 
 # alsa-lib 的头/库在 buildroot 的 sysroot 里；不同 SDK 的配置名不一样，
 # 这里自动挑一份已存在的 sysroot，也可以手动指定：
@@ -49,6 +51,11 @@ ALSA_HDR    := $(SYSROOT)/usr/include/alsa/asoundlib.h
 APP_CFLAGS  := -Wall -Wextra -O2 --sysroot=$(SYSROOT) -I$(SYSROOT)/usr/include
 APP_LDFLAGS := --sysroot=$(SYSROOT) -L$(SYSROOT)/usr/lib
 APP_LDLIBS  := -lasound
+FFMPEG_HDRS := $(SYSROOT)/usr/include/libavformat/avformat.h \
+	$(SYSROOT)/usr/include/libavcodec/avcodec.h \
+	$(SYSROOT)/usr/include/libavutil/channel_layout.h \
+	$(SYSROOT)/usr/include/libswresample/swresample.h
+FFMPEG_LDLIBS := -lavformat -lavcodec -lswresample -lavutil -lasound -lm
 
 # ---------------- 内核模块（可选）----------------
 # 源文件名带 '-' 没问题：kbuild 会用它生成 KBUILD_MODNAME 时把 '-' 换成 '_'
@@ -58,11 +65,26 @@ obj-m += alsa-max98357.o
 # ---------------- 设备树自检 ----------------
 DTS_NAME := dp-rk3506g-mini
 
-.PHONY: all app modules dtb check-env clean
+.PHONY: all app ffmpeg modules dtb check-env clean
 
 all: app
 
 app: $(APP)
+
+ffmpeg: $(FFMPEG_APP)
+
+$(FFMPEG_APP): main1.c Makefile
+	@if [ -z "$(SYSROOT)" ]; then \
+		echo "找不到 sysroot，请指定 make ffmpeg SYSROOT=/path/to/sysroot"; \
+		exit 1; \
+	fi
+	@for f in "$(ALSA_HDR)" $(FFMPEG_HDRS); do \
+		if [ ! -f "$$f" ]; then \
+			echo "缺少头文件: $$f（需要在 Buildroot 中启用 ALSA library、FFmpeg 及 swresample）"; \
+			exit 1; \
+		fi; \
+	done
+	$(APP_CC) $(APP_CFLAGS) -o $@ $< $(APP_LDFLAGS) $(FFMPEG_LDLIBS)
 
 $(APP): main.c
 	@if [ -z "$(SYSROOT)" ] || [ ! -f "$(ALSA_HDR)" ]; then \
@@ -95,6 +117,11 @@ check-env:
 		if [ -e "$$f" ]; then echo "  [OK]   $$f"; else echo "  [MISS] $$f"; fi; \
 	done
 	@echo "提示：板子上运行还需要 /usr/lib/libasound.so.2（rootfs 里得有 alsa-lib）"
+	@for f in $(FFMPEG_HDRS) \
+		"$(SYSROOT)/usr/lib/libavformat.so" "$(SYSROOT)/usr/lib/libavcodec.so" \
+		"$(SYSROOT)/usr/lib/libavutil.so" "$(SYSROOT)/usr/lib/libswresample.so"; do \
+		if [ -e "$$f" ]; then echo "  [OK]   $$f"; else echo "  [MISS] $$f"; fi; \
+	done
 
 # 编内核模块：和 led_bus_device_tree 一样，靠 kbuild 外部模块机制
 modules:
@@ -107,4 +134,4 @@ dtb:
 
 clean:
 	$(MAKE) -C $(KERN_DIR) M=$(CURDIR) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) clean
-	$(RM) $(APP)
+	$(RM) $(APP) $(FFMPEG_APP)
